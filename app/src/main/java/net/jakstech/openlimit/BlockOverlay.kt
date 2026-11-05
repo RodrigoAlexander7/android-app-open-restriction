@@ -21,9 +21,12 @@ import android.widget.TextView
 class BlockOverlay(private val service: AccessibilityService) {
     private val wm = service.getSystemService(WindowManager::class.java)
     private var view: View? = null
+    private var shownPkg: String? = null
 
     fun show(pkg: String, limit: Int) {
+        if (view != null && shownPkg == pkg) return // already blocking this app
         hide()
+        shownPkg = pkg
         val v = build(pkg, limit)
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -38,6 +41,7 @@ class BlockOverlay(private val service: AccessibilityService) {
     fun hide() {
         view?.let { runCatching { wm.removeView(it) } }
         view = null
+        shownPkg = null
     }
 
     private fun dp(v: Float) =
