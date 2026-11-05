@@ -9,6 +9,11 @@
         </intent>
     </queries>
 
+    <!-- Keep the watcher alive against MIUI "clear all" via a foreground notification -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
@@ -29,8 +34,12 @@
             android:name=".LimitAccessibilityService"
             android:process=":watcher"
             android:exported="false"
+            android:foregroundServiceType="specialUse"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the app-open limiter alive so blocked apps stay blocked" />
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

@@ -1,6 +1,11 @@
 package net.jakstech.openlimit
 
+import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
+import android.content.pm.PackageManager
+import android.os.Build
+import android.view.accessibility.AccessibilityManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
@@ -59,6 +64,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         LimitStore(this).migrateFromPrefs(this)
+        // Lets the "OpenLimit activo" notification be visible (Android 13+).
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
         setContent { OpenLimitTheme { MainScreen(resumeTick.intValue) } }
     }
 
@@ -68,12 +79,22 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun isServiceEnabled(ctx: android.content.Context): Boolean {
+private enum class ServiceState { OFF, STOPPED, RUNNING }
+
+/**
+ * OFF: not enabled in settings. STOPPED: enabled but not bound (it was killed and Android
+ * marked it as crashed: it needs to be toggled off/on). RUNNING: working.
+ */
+private fun serviceState(ctx: android.content.Context): ServiceState {
+    val me = ComponentName(ctx, LimitAccessibilityService::class.java)
     val enabled = Settings.Secure.getString(
         ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-    val me = ComponentName(ctx, LimitAccessibilityService::class.java)
-    return enabled.split(':').any { ComponentName.unflattenFromString(it) == me }
+    )?.split(':')?.any { ComponentName.unflattenFromString(it) == me } == true
+    if (!enabled) return ServiceState.OFF
+    val running = ctx.getSystemService(AccessibilityManager::class.java)
+        .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        .any { it.resolveInfo.serviceInfo.let { s -> s.packageName == me.packageName && s.name == me.className } }
+    return if (running) ServiceState.RUNNING else ServiceState.STOPPED
 }
 
 @Composable
@@ -95,7 +116,7 @@ private fun MainScreen(resumeTick: Int) {
     }
     val limits = remember(version, resumeTick) { store.limits() }
     val counts = remember(version, resumeTick) { store.counts() }
-    val serviceOn = remember(resumeTick) { isServiceEnabled(ctx) }
+    val service = remember(version, resumeTick) { serviceState(ctx) }
     val resetAt = remember(version, resumeTick) { resetTimeLabel() }
     var query by remember { mutableStateOf("") }
 
@@ -114,8 +135,8 @@ private fun MainScreen(resumeTick: Int) {
                 color = Palette.Muted, fontSize = 14.sp,
             )
             Spacer(Modifier.height(20.dp))
-            if (!serviceOn) {
-                ServiceBanner {
+            if (service != ServiceState.RUNNING) {
+                ServiceBanner(stopped = service == ServiceState.STOPPED) {
                     ctx.startActivity(
                         Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -148,15 +169,20 @@ private fun MainScreen(resumeTick: Int) {
 }
 
 @Composable
-private fun ServiceBanner(onClick: () -> Unit) {
+private fun ServiceBanner(stopped: Boolean, onClick: () -> Unit) {
+    val bg = if (stopped) Palette.Danger else Palette.Accent
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
-            .background(Palette.Accent).clickable(onClick = onClick).padding(18.dp)
+            .background(bg).clickable(onClick = onClick).padding(18.dp)
     ) {
-        Text("Activa el servicio", color = Palette.Bg, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            if (stopped) "El servicio se detuvo" else "Activa el servicio",
+            color = Palette.Bg, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+        )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Accesibilidad → OpenLimit → Activar. Es necesario para detectar y bloquear apps.",
+            if (stopped) "El sistema lo cerró y no está contando. Accesibilidad → OpenLimit → desactívalo y vuelve a activarlo."
+            else "Accesibilidad → OpenLimit → Activar. Es necesario para detectar y bloquear apps.",
             color = Palette.Bg.copy(alpha = 0.75f), fontSize = 13.sp,
         )
     }

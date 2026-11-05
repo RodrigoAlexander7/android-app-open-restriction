@@ -1,6 +1,13 @@
 package net.jakstech.openlimit
 
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 
@@ -22,6 +29,36 @@ class LimitAccessibilityService : AccessibilityService() {
         store = LimitStore(this)
         overlay = BlockOverlay(this)
         ignored = buildIgnoredSet()
+        goForeground()
+    }
+
+    /**
+     * A foreground notification raises the process priority (adj ~200 instead of ~900),
+     * so MIUI's "clear all" / swipe cleanup no longer kills the watcher.
+     */
+    private fun goForeground() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "Servicio activo", NotificationManager.IMPORTANCE_MIN)
+                .apply { setShowBadge(false) }
+        )
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("OpenLimit activo")
+            .setContentText("Vigilando los límites de apps")
+            .setContentIntent(open)
+            .setOngoing(true)
+            .build()
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(1, n)
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -62,4 +99,8 @@ class LimitAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    companion object {
+        private const val CHANNEL = "watcher"
+    }
 }
