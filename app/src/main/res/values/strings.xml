@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">OpenLimit</string>
+    <string name="a11y_description">Detecta qué app se abre para contar las aperturas por hora y bloquearla al superar el límite. No lee el contenido de la pantalla.</string>
+</resources>
