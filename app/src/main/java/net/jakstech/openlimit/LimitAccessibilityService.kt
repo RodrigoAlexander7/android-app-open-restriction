@@ -70,10 +70,10 @@ class LimitAccessibilityService : AccessibilityService() {
      * late events from an app that is closing all fire TYPE_WINDOW_STATE_CHANGED.
      * So we count *sessions*, not events:
      *  1. only events whose class is a real Activity of that package are considered;
-     *  2. the foreground app is decided once it's stable for [SETTLE_MS];
-     *  3. coming back to the same app within [REENTRY_GRACE_MS] of leaving an allowed
-     *     session is the same session (cancelled gestures, flicker);
-     *  4. the first stable app after the service (re)connects is not counted.
+     *  2. the foreground app is decided once it's stable for [SETTLE_MS], measured with
+     *     the events' own timestamps: delivery can be delayed (e.g. the OS pauses our
+     *     process) and then events arrive in a burst, which must be replayed in order;
+     *  3. the first stable app after the service (re)connects is not counted.
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
@@ -81,34 +81,43 @@ class LimitAccessibilityService : AccessibilityService() {
         val cls = event.className?.toString() ?: return
         // Overlays (status bar, keyboard, share sheet...) don't mean we left the current app.
         if (pkg in ignored) return
+        val t = event.eventTime // uptimeMillis when the event happened
+        Log.v(
+            TAG, "event $pkg/$cls changes=${event.contentChangeTypes} " +
+                "lag=${SystemClock.uptimeMillis() - t}ms"
+        )
         // Pane changes inside an app (miniplayer, drawers...) are not window switches.
         if (event.contentChangeTypes != 0) return
         if (!isActivity(pkg, cls)) {
             Log.d(TAG, "ignore non-activity $pkg/$cls")
             return
         }
-        pending = pkg
+        // The previous candidate stayed in front long enough before this event: it was a
+        // real foreground app, even if we only learn it now (late burst).
+        pendingPkg?.let { if (t - pendingAt >= SETTLE_MS) onForeground(it, live = false) }
+        pendingPkg = pkg
+        pendingAt = t
         handler.removeCallbacks(settle)
-        handler.postDelayed(settle, SETTLE_MS)
+        handler.postDelayed(settle, (t + SETTLE_MS - SystemClock.uptimeMillis()).coerceAtLeast(0))
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var pending: String? = null
-    private val settle = Runnable { pending?.let { onForeground(it) } }
+    private var pendingPkg: String? = null
+    private var pendingAt = 0L
+    /** No newer event arrived for [SETTLE_MS]: the candidate is what's on screen now. */
+    private val settle = Runnable { pendingPkg?.let { onForeground(it, live = true) } }
 
-    /** Foreground app as last decided, and whether its session was allowed. */
+    /** Foreground app as last decided. */
     private var current: String? = null
-    private var currentAllowed = true
     private var initialized = false
-    /** When each app last left the foreground after an allowed session (elapsedRealtime). */
-    private val leftAt = HashMap<String, Long>()
 
-    private fun onForeground(pkg: String) {
+    /**
+     * [live] = the app is on screen right now. A non-live decision comes from replaying
+     * a late burst: the open still counts, but there's nothing on screen left to block.
+     */
+    private fun onForeground(pkg: String, live: Boolean) {
         if (pkg == current) return
-        val now = SystemClock.elapsedRealtime()
-        current?.let { if (currentAllowed) leftAt[it] = now }
         current = pkg
-        currentAllowed = true
 
         if (!initialized) {
             initialized = true
@@ -122,16 +131,10 @@ class LimitAccessibilityService : AccessibilityService() {
             return
         }
 
-        val left = leftAt[pkg]
-        if (left != null && now - left < REENTRY_GRACE_MS) {
-            Log.d(TAG, "back to $pkg after ${now - left}ms: same session")
-            return
-        }
         val used = store.countOf(pkg)
         if (used >= limit) {
-            Log.d(TAG, "BLOCK $pkg ($used/$limit)")
-            currentAllowed = false
-            block(pkg, limit)
+            Log.d(TAG, "BLOCK $pkg ($used/$limit)${if (live) "" else " - already left, not shown"}")
+            if (live) block(pkg, limit)
         } else {
             store.increment(pkg)
             Log.d(TAG, "open $pkg -> ${used + 1}/$limit")
@@ -179,6 +182,5 @@ class LimitAccessibilityService : AccessibilityService() {
         private const val TAG = "OpenLimit"
         private const val CHANNEL = "watcher"
         private const val SETTLE_MS = 400L
-        private const val REENTRY_GRACE_MS = 3_000L
     }
 }

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- notificationTimeout must be 0: with a timeout Android merges events of the same type
+     and delivers only the last one, so an app's "activity shown" event gets lost when an
+     internal view event follows it within the window. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault"
     android:canRetrieveWindowContent="false"
     android:description="@string/a11y_description"
-    android:notificationTimeout="100" />
+    android:notificationTimeout="0" />

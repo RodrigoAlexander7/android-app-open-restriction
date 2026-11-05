@@ -18,12 +18,27 @@ La 4.ª vez te manda al inicio y muestra una pantalla de bloqueo hasta las 15:00
 
 | Pieza | Archivo | Qué hace |
 |---|---|---|
-| Servicio de accesibilidad | [`LimitAccessibilityService.kt`](app/src/main/java/net/jakstech/openlimit/LimitAccessibilityService.kt) | Detecta qué app pasa a primer plano. Si viene de otra app (o del inicio) cuenta una apertura. El teclado, la barra de notificaciones y el menú de compartir se ignoran. |
+| Servicio de accesibilidad | [`LimitAccessibilityService.kt`](app/src/main/java/net/jakstech/openlimit/LimitAccessibilityService.kt) | Detecta qué app pasa a primer plano y cuenta **sesiones**, no eventos (ver abajo). El teclado, la barra de notificaciones y el menú de compartir se ignoran. |
 | Pantalla de bloqueo | [`BlockOverlay.kt`](app/src/main/java/net/jakstech/openlimit/BlockOverlay.kt) | Se dibuja como capa de accesibilidad (`TYPE_ACCESSIBILITY_OVERLAY`), así que no necesita permisos extra. |
 | Almacenamiento | [`LimitStore.kt`](app/src/main/java/net/jakstech/openlimit/LimitStore.kt) | `limits.properties` (lo escribe la interfaz) y `counts.properties` (lo escribe el servicio, junto con la hora a la que pertenecen los contadores). |
 | Interfaz | [`MainActivity.kt`](app/src/main/java/net/jakstech/openlimit/MainActivity.kt) | Lista de apps con el selector − / +. |
 
-El servicio corre en su propio proceso (`:watcher`). Así, cerrar OpenLimit desde Recientes no lo mata; en MIUI eso dejaba el servicio caído.
+### Cómo se cuenta una apertura
+
+Los eventos de ventana (`TYPE_WINDOW_STATE_CHANGED`) generan mucho ruido. Animaciones, gestos, diálogos, paneles y eventos tardíos de una app que se está cerrando también los disparan. Por eso:
+
+1. Solo cuentan los eventos cuya clase es una **Activity real** del paquete. Diálogos, `FrameLayout` y paneles se ignoran.
+2. La app al frente se decide cuando lleva **400 ms estable**. Ese tiempo se mide con la hora de cada evento (`eventTime`), no con la de llegada. Si el sistema pausa el proceso, los eventos llegan juntos y se procesan en orden. Si la app ya no está en pantalla, la apertura se cuenta pero no se muestra el bloqueo.
+3. `notificationTimeout="0"`: con un valor mayor, Android fusiona los eventos y se pierde el de "pantalla mostrada".
+4. La primera app al frente después de que el servicio arranca no cuenta.
+
+Cada decisión queda en el registro con la etiqueta `OpenLimit`:
+
+```bash
+adb logcat -s OpenLimit
+```
+
+El servicio corre en su propio proceso (`:watcher`). Además, es un servicio en primer plano con una notificación silenciosa. Así, cerrar OpenLimit o "limpiar todo" en Recientes no lo mata; en MIUI eso dejaba el servicio caído.
 Por eso los datos se guardan en archivos que se releen en cada acceso y no en `SharedPreferences`, que guarda una copia en memoria por proceso y quedaría desactualizada.
 
 No se lee el contenido de la pantalla (`canRetrieveWindowContent=false`). Solo se usa el nombre del paquete de la app en primer plano.
