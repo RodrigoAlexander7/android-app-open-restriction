@@ -1,0 +1,72 @@
+# OpenLimit
+
+App Android minimalista para limitar **cuántas veces por hora** puedes abrir cada app.
+
+Ejemplo: con un límite de 3 en WhatsApp, puedes abrirla 3 veces entre las 14:00 y las 14:59.
+La 4.ª vez te manda al inicio y muestra una pantalla de bloqueo hasta las 15:00, cuando el contador se reinicia.
+
+## Funciones
+
+- Límite de aperturas por hora para cada app (0 = bloqueada siempre, "—" = sin límite).
+- Contadores que se reinician en cada hora en punto.
+- Límites y contadores guardados en archivos: se conservan aunque reinicies el teléfono.
+- **Anti-trampa:** cuando una app agota sus aperturas, no se puede subir ni quitar su límite hasta la siguiente hora. Solo se puede hacer más estricto.
+- Pantalla de bloqueo a pantalla completa con la hora en que la app vuelve a estar disponible.
+- Interfaz oscura y minimalista con buscador; las apps con límite aparecen primero.
+
+## Cómo funciona
+
+| Pieza | Archivo | Qué hace |
+|---|---|---|
+| Servicio de accesibilidad | [`LimitAccessibilityService.kt`](app/src/main/java/net/jakstech/openlimit/LimitAccessibilityService.kt) | Detecta qué app pasa a primer plano. Si viene de otra app (o del inicio) cuenta una apertura. El teclado, la barra de notificaciones y el menú de compartir se ignoran. |
+| Pantalla de bloqueo | [`BlockOverlay.kt`](app/src/main/java/net/jakstech/openlimit/BlockOverlay.kt) | Se dibuja como capa de accesibilidad (`TYPE_ACCESSIBILITY_OVERLAY`), así que no necesita permisos extra. |
+| Almacenamiento | [`LimitStore.kt`](app/src/main/java/net/jakstech/openlimit/LimitStore.kt) | `limits.properties` (lo escribe la interfaz) y `counts.properties` (lo escribe el servicio, junto con la hora a la que pertenecen los contadores). |
+| Interfaz | [`MainActivity.kt`](app/src/main/java/net/jakstech/openlimit/MainActivity.kt) | Lista de apps con el selector − / +. |
+
+El servicio corre en su propio proceso (`:watcher`). Así, cerrar OpenLimit desde Recientes no lo mata; en MIUI eso dejaba el servicio caído.
+Por eso los datos se guardan en archivos que se releen en cada acceso y no en `SharedPreferences`, que guarda una copia en memoria por proceso y quedaría desactualizada.
+
+No se lee el contenido de la pantalla (`canRetrieveWindowContent=false`). Solo se usa el nombre del paquete de la app en primer plano.
+
+## Requisitos
+
+- Android 8.0+ (minSdk 26, targetSdk 36)
+- JDK 17+, Android SDK con la plataforma 36
+- Gradle 9.2.1 (vía wrapper), AGP 9.0.1, Kotlin + Jetpack Compose
+
+## Compilar e instalar
+
+Con el teléfono conectado por USB y la depuración USB activada:
+
+```bash
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Configuración en el teléfono
+
+1. Abre OpenLimit y toca **"Activa el servicio"**, o ve a **Ajustes → Accesibilidad → Descargadas → OpenLimit → Activar**.
+2. En Xiaomi / MIUI / HyperOS (muy recomendado):
+   - Información de la app → **Inicio automático**: activado.
+   - **Ahorro de batería** → **Sin restricciones**.
+3. Si Android muestra "ajuste restringido": Información de la app → ⋮ → **Permitir ajustes restringidos**.
+
+## Batería
+
+El servicio solo se ejecuta cuando Android le avisa que cambió la app en primer plano. No hay temporizadores, wakelocks, red ni GPS.
+En cada evento lee un archivo pequeño. La interfaz refresca los contadores cada segundo, pero solo mientras está abierta.
+
+## Limitaciones conocidas
+
+- Cambiar la hora del teléfono reinicia los contadores.
+- Desactivar el servicio de accesibilidad, forzar la detención o desinstalar la app quita el bloqueo.
+- Abrir una app en pantalla dividida o en ventana flotante puede no contarse de forma exacta.
+
+## Ideas futuras
+
+- Límite por **tiempo de uso** (minutos por hora o por día).
+- **"1 minuto extra"**: una sola vez por hora y por app.
+- Protección contra el cambio de hora (usar un reloj que no dependa de la hora del sistema).
+- Modo concentración o descanso por horario.
+- Panel de uso diario.
+- Protección contra desinstalación (administrador del dispositivo).
