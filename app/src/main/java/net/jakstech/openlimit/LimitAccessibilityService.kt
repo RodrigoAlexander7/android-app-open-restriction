@@ -1,7 +1,6 @@
 package net.jakstech.openlimit
 
 import android.accessibilityservice.AccessibilityService
-import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 
@@ -17,8 +16,11 @@ class LimitAccessibilityService : AccessibilityService() {
     private var lastPkg: String? = null
     private var ignored: Set<String> = emptySet()
 
+    private lateinit var overlay: BlockOverlay
+
     override fun onServiceConnected() {
         store = LimitStore(this)
+        overlay = BlockOverlay(this)
         ignored = buildIgnoredSet()
     }
 
@@ -42,13 +44,7 @@ class LimitAccessibilityService : AccessibilityService() {
 
     private fun block(pkg: String, limit: Int) {
         performGlobalAction(GLOBAL_ACTION_HOME)
-        startActivity(
-            Intent(this, BlockActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .putExtra(BlockActivity.EXTRA_PKG, pkg)
-                .putExtra(BlockActivity.EXTRA_LIMIT, limit)
-        )
-        lastPkg = packageName
+        overlay.show(pkg, limit)
     }
 
     private fun buildIgnoredSet(): Set<String> {

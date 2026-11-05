@@ -2,7 +2,6 @@ package net.jakstech.openlimit
 
 import android.content.ComponentName
 import android.content.Intent
-import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.provider.Settings
@@ -32,7 +31,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        LimitStore(this).migrateFromPrefs(this)
         setContent { OpenLimitTheme { MainScreen(resumeTick.intValue) } }
     }
 
@@ -80,15 +81,12 @@ private fun MainScreen(resumeTick: Int) {
     val ctx = LocalContext.current
     val store = remember { LimitStore(ctx) }
 
-    // Bump on any prefs change so counters update live while the screen is open.
+    // Counts are written by the watcher process: re-read the files every second while visible.
     var version by remember { mutableIntStateOf(0) }
-    DisposableEffect(Unit) {
-        val l = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> version++ }
-        store.limitsPrefs.registerOnSharedPreferenceChangeListener(l)
-        store.countsPrefs.registerOnSharedPreferenceChangeListener(l)
-        onDispose {
-            store.limitsPrefs.unregisterOnSharedPreferenceChangeListener(l)
-            store.countsPrefs.unregisterOnSharedPreferenceChangeListener(l)
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            version++
         }
     }
 
@@ -132,12 +130,18 @@ private fun MainScreen(resumeTick: Int) {
         if (limited.isNotEmpty()) {
             item { SectionLabel("Con límite") }
             items(limited, key = { "l_" + it.pkg }) { app ->
-                AppRow(app, limits[app.pkg], counts[app.pkg] ?: 0) { store.setLimit(app.pkg, it) }
+                AppRow(app, limits[app.pkg], counts[app.pkg] ?: 0) {
+                    store.setLimit(app.pkg, it)
+                    version++
+                }
             }
         }
         item { SectionLabel(if (apps.isEmpty()) "Cargando…" else "Apps") }
         items(rest, key = { "r_" + it.pkg }) { app ->
-            AppRow(app, null, counts[app.pkg] ?: 0) { store.setLimit(app.pkg, it) }
+            AppRow(app, null, counts[app.pkg] ?: 0) {
+                store.setLimit(app.pkg, it)
+                version++
+            }
         }
         item { Spacer(Modifier.height(32.dp)) }
     }
