@@ -10,7 +10,8 @@ import java.util.Properties
 
 /**
  * Persistent storage (plain files, survives reboots) shared by two processes:
- *  - the UI process writes `limits.properties` (package -> max opens per hour)
+ *  - the UI process writes `limits.properties` (package -> max opens per hour) and
+ *    `settings.properties` (minimum pause)
  *  - the watcher process (accessibility service) writes `counts.properties`
  *    (opens per package for the current clock hour, tagged with that hour)
  *
@@ -22,6 +23,7 @@ class LimitStore(context: Context) {
     private val dir = context.applicationContext.filesDir
     private val limitsFile = File(dir, "limits.properties")
     private val countsFile = File(dir, "counts.properties")
+    private val settingsFile = File(dir, "settings.properties")
 
     fun limits(): Map<String, Int> = read(limitsFile).toIntMap()
 
@@ -68,6 +70,32 @@ class LimitStore(context: Context) {
         true
     }
 
+    /**
+     * Minimum pause: coming back to an app (e.g. after minimizing it) less than this many
+     * minutes after leaving it is the same session, not a new open.
+     */
+    fun pauseMinutes(): Int =
+        read(settingsFile).getProperty(KEY_PAUSE)?.toIntOrNull() ?: DEFAULT_PAUSE_MIN
+
+    /** True if any limited app used up its opens this hour. */
+    fun anyExhausted(): Boolean {
+        val counts = counts()
+        return limits().any { (pkg, limit) -> (counts[pkg] ?: 0) >= limit }
+    }
+
+    /**
+     * Changes the minimum pause (0..[MAX_PAUSE_MIN]). A longer pause makes the limits more
+     * lenient, so raising it is rejected while any app is exhausted. Returns false if rejected.
+     */
+    fun setPauseMinutes(minutes: Int): Boolean = synchronized(LOCK) {
+        val m = minutes.coerceIn(0, MAX_PAUSE_MIN)
+        if (m > pauseMinutes() && anyExhausted()) return false
+        val p = read(settingsFile)
+        p.setProperty(KEY_PAUSE, m.toString())
+        write(settingsFile, p)
+        true
+    }
+
     /** One-time import of limits saved by v1 (SharedPreferences). Call from the UI process. */
     fun migrateFromPrefs(context: Context) {
         val old = context.getSharedPreferences("limits", Context.MODE_PRIVATE)
@@ -94,6 +122,9 @@ class LimitStore(context: Context) {
 
     companion object {
         private const val KEY_HOUR = "__hour"
+        private const val KEY_PAUSE = "pause_minutes"
+        const val DEFAULT_PAUSE_MIN = 2
+        const val MAX_PAUSE_MIN = 10
         private val LOCK = Any()
 
         fun currentHourKey(): String =

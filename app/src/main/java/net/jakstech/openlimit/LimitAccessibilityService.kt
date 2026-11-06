@@ -73,7 +73,9 @@ class LimitAccessibilityService : AccessibilityService() {
      *  2. the foreground app is decided once it's stable for [SETTLE_MS], measured with
      *     the events' own timestamps: delivery can be delayed (e.g. the OS pauses our
      *     process) and then events arrive in a burst, which must be replayed in order;
-     *  3. the first stable app after the service (re)connects is not counted.
+     *  3. the first stable app after the service (re)connects is not counted;
+     *  4. coming back to an app less than the "minimum pause" after leaving an allowed
+     *     session (e.g. minimize and return) resumes that session instead of opening anew.
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
@@ -94,7 +96,9 @@ class LimitAccessibilityService : AccessibilityService() {
         }
         // The previous candidate stayed in front long enough before this event: it was a
         // real foreground app, even if we only learn it now (late burst).
-        pendingPkg?.let { if (t - pendingAt >= SETTLE_MS) onForeground(it, live = false) }
+        pendingPkg?.let {
+            if (t - pendingAt >= SETTLE_MS) onForeground(it, live = false, at = toElapsed(pendingAt))
+        }
         pendingPkg = pkg
         pendingAt = t
         handler.removeCallbacks(settle)
@@ -105,19 +109,35 @@ class LimitAccessibilityService : AccessibilityService() {
     private var pendingPkg: String? = null
     private var pendingAt = 0L
     /** No newer event arrived for [SETTLE_MS]: the candidate is what's on screen now. */
-    private val settle = Runnable { pendingPkg?.let { onForeground(it, live = true) } }
-
-    /** Foreground app as last decided. */
-    private var current: String? = null
-    private var initialized = false
+    private val settle = Runnable {
+        pendingPkg?.let { onForeground(it, live = true, at = toElapsed(pendingAt)) }
+    }
 
     /**
+     * Event times are uptimeMillis, which stops while the phone sleeps. The minimum pause
+     * must include sleep time (screen off for an hour is a long pause), so convert to
+     * elapsedRealtime.
+     */
+    private fun toElapsed(uptime: Long) =
+        SystemClock.elapsedRealtime() - (SystemClock.uptimeMillis() - uptime)
+
+    /** Foreground app as last decided, and whether its session was allowed (not blocked). */
+    private var current: String? = null
+    private var currentAllowed = false
+    private var initialized = false
+    /** When each app last left the foreground after an allowed session (elapsedRealtime). */
+    private val leftAt = HashMap<String, Long>()
+
+    /**
+     * [pkg] came to the front at [at] (elapsedRealtime).
      * [live] = the app is on screen right now. A non-live decision comes from replaying
      * a late burst: the open still counts, but there's nothing on screen left to block.
      */
-    private fun onForeground(pkg: String, live: Boolean) {
+    private fun onForeground(pkg: String, live: Boolean, at: Long) {
         if (pkg == current) return
+        current?.let { if (currentAllowed) leftAt[it] = at }
         current = pkg
+        currentAllowed = true
 
         if (!initialized) {
             initialized = true
@@ -131,9 +151,17 @@ class LimitAccessibilityService : AccessibilityService() {
             return
         }
 
+        val away = leftAt[pkg]?.let { at - it }
+        val pauseMs = store.pauseMinutes() * 60_000L
+        if (away != null && away < pauseMs) {
+            Log.d(TAG, "resume $pkg after ${away / 1000}s (< ${pauseMs / 1000}s): same session")
+            return
+        }
         val used = store.countOf(pkg)
         if (used >= limit) {
             Log.d(TAG, "BLOCK $pkg ($used/$limit)${if (live) "" else " - already left, not shown"}")
+            currentAllowed = false
+            leftAt.remove(pkg) // a block ends any earlier session: nothing left to resume
             if (live) block(pkg, limit)
         } else {
             store.increment(pkg)

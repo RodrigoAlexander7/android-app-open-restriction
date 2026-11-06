@@ -118,6 +118,8 @@ private fun MainScreen(resumeTick: Int) {
     val counts = remember(version, resumeTick) { store.counts() }
     val service = remember(version, resumeTick) { serviceState(ctx) }
     val resetAt = remember(version, resumeTick) { resetTimeLabel() }
+    val pauseMin = remember(version, resumeTick) { store.pauseMinutes() }
+    val pauseLocked = remember(version, resumeTick) { store.anyExhausted() }
     var query by remember { mutableStateOf("") }
 
     val filtered = apps.filter { query.isBlank() || it.label.contains(query.trim(), true) }
@@ -144,6 +146,11 @@ private fun MainScreen(resumeTick: Int) {
                 }
                 Spacer(Modifier.height(16.dp))
             }
+            PauseSetting(pauseMin, locked = pauseLocked) {
+                store.setPauseMinutes(it)
+                version++
+            }
+            Spacer(Modifier.height(16.dp))
             SearchField(query) { query = it }
             Spacer(Modifier.height(8.dp))
         }
@@ -185,6 +192,40 @@ private fun ServiceBanner(stopped: Boolean, onClick: () -> Unit) {
             else "Accesibilidad → OpenLimit → Activar. Es necesario para detectar y bloquear apps.",
             color = Palette.Bg.copy(alpha = 0.75f), fontSize = 13.sp,
         )
+    }
+}
+
+/**
+ * Minimum pause: returning to an app sooner than this after leaving it is not a new open.
+ * When [locked] (some app is exhausted) it can only be lowered, never raised.
+ */
+@Composable
+private fun PauseSetting(minutes: Int, locked: Boolean, onChange: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Palette.Card)
+            .padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Pausa mínima", color = Palette.Text, fontSize = 15.sp)
+            Text(
+                when {
+                    minutes == 0 -> "Cada vuelta a una app cuenta"
+                    locked -> "Volver antes de $minutes min no cuenta · fijo hasta las ${resetTimeLabel()}"
+                    else -> "Volver antes de $minutes min no cuenta"
+                },
+                color = Palette.Muted, fontSize = 12.sp,
+            )
+        }
+        StepButton("−", enabled = minutes > 0) { onChange(minutes - 1) }
+        Text(
+            "$minutes", color = Palette.Accent, fontSize = 17.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.width(34.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        StepButton("+", enabled = !locked && minutes < LimitStore.MAX_PAUSE_MIN) {
+            onChange(minutes + 1)
+        }
     }
 }
 

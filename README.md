@@ -11,6 +11,7 @@ La 4.ª vez te manda al inicio y muestra una pantalla de bloqueo hasta las 15:00
 - Contadores que se reinician en cada hora en punto.
 - Límites y contadores guardados en archivos: se conservan aunque reinicies el teléfono.
 - **Anti-trampa:** cuando una app agota sus aperturas, no se puede subir ni quitar su límite hasta la siguiente hora. Solo se puede hacer más estricto.
+- **Pausa mínima:** minimizar una app y volver en menos de N minutos no gasta una apertura.
 - Pantalla de bloqueo a pantalla completa con la hora en que la app vuelve a estar disponible.
 - Interfaz oscura y minimalista con buscador; las apps con límite aparecen primero.
 
@@ -31,6 +32,7 @@ Los eventos de ventana (`TYPE_WINDOW_STATE_CHANGED`) generan mucho ruido. Animac
 2. La app al frente se decide cuando lleva **400 ms estable**. Ese tiempo se mide con la hora de cada evento (`eventTime`), no con la de llegada. Si el sistema pausa el proceso, los eventos llegan juntos y se procesan en orden. Si la app ya no está en pantalla, la apertura se cuenta pero no se muestra el bloqueo.
 3. `notificationTimeout="0"`: con un valor mayor, Android fusiona los eventos y se pierde el de "pantalla mostrada".
 4. La primera app al frente después de que el servicio arranca no cuenta.
+5. **Pausa mínima** (por defecto 2 min, ajustable de 0 a 10 en la pantalla principal): si vuelves a una app, por ejemplo después de minimizarla, antes de ese tiempo, sigue siendo la misma sesión y no cuenta. Si vuelves después, cuenta como apertura nueva. El tiempo incluye el que pasa con la pantalla apagada. No se puede subir mientras alguna app tenga sus aperturas agotadas. Un bloqueo termina la sesión anterior.
 
 Cada decisión queda en el registro con la etiqueta `OpenLimit`:
 
