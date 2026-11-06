@@ -18,9 +18,15 @@ import java.util.Properties
  * Files are re-read on every access, so each process always sees the other's latest
  * writes (SharedPreferences caches in memory and would go stale across processes).
  * Writes are atomic (temp file + rename).
+ *
+ * [now] (wall-clock millis) is injectable so tests can move across hours.
  */
-class LimitStore(context: Context) {
-    private val dir = context.applicationContext.filesDir
+class LimitStore(
+    dir: File,
+    private val now: () -> Long = System::currentTimeMillis,
+) {
+    constructor(context: Context) : this(context.applicationContext.filesDir)
+
     private val limitsFile = File(dir, "limits.properties")
     private val countsFile = File(dir, "counts.properties")
     private val settingsFile = File(dir, "settings.properties")
@@ -32,18 +38,18 @@ class LimitStore(context: Context) {
     /** Counts for the current hour; counts saved during a previous hour read as empty. */
     fun counts(): Map<String, Int> {
         val p = read(countsFile)
-        if (p.getProperty(KEY_HOUR) != currentHourKey()) return emptyMap()
+        if (p.getProperty(KEY_HOUR) != hourKey(now())) return emptyMap()
         return p.toIntMap()
     }
 
     fun countOf(pkg: String): Int = counts()[pkg] ?: 0
 
     fun increment(pkg: String) = synchronized(LOCK) {
-        val now = currentHourKey()
+        val hour = hourKey(now())
         val p = read(countsFile)
-        if (p.getProperty(KEY_HOUR) != now) {
+        if (p.getProperty(KEY_HOUR) != hour) {
             p.clear()
-            p.setProperty(KEY_HOUR, now)
+            p.setProperty(KEY_HOUR, hour)
         }
         p.setProperty(pkg, ((p.getProperty(pkg)?.toIntOrNull() ?: 0) + 1).toString())
         write(countsFile, p)
@@ -57,9 +63,11 @@ class LimitStore(context: Context) {
 
     /**
      * Changes the limit. While the app is exhausted, raising or removing the limit is
-     * rejected (it would bypass the block) until the hour resets. Returns false if rejected.
+     * rejected (it would bypass the block) until the hour resets. Negative limits are
+     * invalid. Returns false if rejected.
      */
     fun setLimit(pkg: String, limit: Int?): Boolean = synchronized(LOCK) {
+        if (limit != null && limit < 0) return false
         val current = limitOf(pkg)
         if (current != null && isExhausted(pkg) && (limit == null || limit > current)) {
             return false
@@ -72,10 +80,10 @@ class LimitStore(context: Context) {
 
     /**
      * Minimum pause: coming back to an app (e.g. after minimizing it) less than this many
-     * minutes after leaving it is the same session, not a new open.
+     * seconds after leaving it is the same session, not a new open.
      */
-    fun pauseMinutes(): Int =
-        read(settingsFile).getProperty(KEY_PAUSE)?.toIntOrNull() ?: DEFAULT_PAUSE_MIN
+    fun pauseSeconds(): Int =
+        read(settingsFile).getProperty(KEY_PAUSE)?.toIntOrNull() ?: DEFAULT_PAUSE_S
 
     /** True if any limited app used up its opens this hour. */
     fun anyExhausted(): Boolean {
@@ -84,14 +92,16 @@ class LimitStore(context: Context) {
     }
 
     /**
-     * Changes the minimum pause (0..[MAX_PAUSE_MIN]). A longer pause makes the limits more
-     * lenient, so raising it is rejected while any app is exhausted. Returns false if rejected.
+     * Changes the minimum pause (0..[MAX_PAUSE_S] seconds). A longer pause makes the limits
+     * more lenient, so raising it is rejected while any app is exhausted. Returns false if
+     * rejected.
      */
-    fun setPauseMinutes(minutes: Int): Boolean = synchronized(LOCK) {
-        val m = minutes.coerceIn(0, MAX_PAUSE_MIN)
-        if (m > pauseMinutes() && anyExhausted()) return false
+    fun setPauseSeconds(seconds: Int): Boolean = synchronized(LOCK) {
+        val s = seconds.coerceIn(0, MAX_PAUSE_S)
+        if (s > pauseSeconds() && anyExhausted()) return false
         val p = read(settingsFile)
-        p.setProperty(KEY_PAUSE, m.toString())
+        p.remove(OLD_KEY_PAUSE_MIN)
+        p.setProperty(KEY_PAUSE, s.toString())
         write(settingsFile, p)
         true
     }
@@ -122,13 +132,16 @@ class LimitStore(context: Context) {
 
     companion object {
         private const val KEY_HOUR = "__hour"
-        private const val KEY_PAUSE = "pause_minutes"
-        const val DEFAULT_PAUSE_MIN = 2
-        const val MAX_PAUSE_MIN = 10
+        private const val KEY_PAUSE = "pause_seconds"
+        private const val OLD_KEY_PAUSE_MIN = "pause_minutes" // v4, ignored from now on
+        const val DEFAULT_PAUSE_S = 45
+        const val MAX_PAUSE_S = 300
+        const val PAUSE_STEP_S = 15
         private val LOCK = Any()
 
-        fun currentHourKey(): String =
-            SimpleDateFormat("yyyyMMddHH", Locale.US).format(Date())
+        /** Local clock hour the given instant belongs to, e.g. "2026110609". */
+        fun hourKey(millis: Long): String =
+            SimpleDateFormat("yyyyMMddHH", Locale.US).format(Date(millis))
 
         /** Millis of the next full hour, when counters reset. */
         fun nextResetMillis(): Long = Calendar.getInstance().apply {

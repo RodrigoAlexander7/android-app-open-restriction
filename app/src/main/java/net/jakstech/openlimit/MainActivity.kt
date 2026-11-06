@@ -118,7 +118,7 @@ private fun MainScreen(resumeTick: Int) {
     val counts = remember(version, resumeTick) { store.counts() }
     val service = remember(version, resumeTick) { serviceState(ctx) }
     val resetAt = remember(version, resumeTick) { resetTimeLabel() }
-    val pauseMin = remember(version, resumeTick) { store.pauseMinutes() }
+    val pauseS = remember(version, resumeTick) { store.pauseSeconds() }
     val pauseLocked = remember(version, resumeTick) { store.anyExhausted() }
     var query by remember { mutableStateOf("") }
 
@@ -146,8 +146,8 @@ private fun MainScreen(resumeTick: Int) {
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            PauseSetting(pauseMin, locked = pauseLocked) {
-                store.setPauseMinutes(it)
+            PauseSetting(pauseS, locked = pauseLocked) {
+                store.setPauseSeconds(it)
                 version++
             }
             Spacer(Modifier.height(16.dp))
@@ -200,7 +200,8 @@ private fun ServiceBanner(stopped: Boolean, onClick: () -> Unit) {
  * When [locked] (some app is exhausted) it can only be lowered, never raised.
  */
 @Composable
-private fun PauseSetting(minutes: Int, locked: Boolean, onChange: (Int) -> Unit) {
+private fun PauseSetting(seconds: Int, locked: Boolean, onChange: (Int) -> Unit) {
+    val step = LimitStore.PAUSE_STEP_S
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Palette.Card)
             .padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
@@ -210,23 +211,30 @@ private fun PauseSetting(minutes: Int, locked: Boolean, onChange: (Int) -> Unit)
             Text("Pausa mínima", color = Palette.Text, fontSize = 15.sp)
             Text(
                 when {
-                    minutes == 0 -> "Cada vuelta a una app cuenta"
-                    locked -> "Volver antes de $minutes min no cuenta · fijo hasta las ${resetTimeLabel()}"
-                    else -> "Volver antes de $minutes min no cuenta"
+                    seconds == 0 -> "Cada vuelta a una app cuenta"
+                    locked -> "Volver antes de ${pauseLabel(seconds)} no cuenta · fijo hasta las ${resetTimeLabel()}"
+                    else -> "Volver antes de ${pauseLabel(seconds)} no cuenta"
                 },
                 color = Palette.Muted, fontSize = 12.sp,
             )
         }
-        StepButton("−", enabled = minutes > 0) { onChange(minutes - 1) }
+        StepButton("−", enabled = seconds > 0) { onChange(seconds - step) }
         Text(
-            "$minutes", color = Palette.Accent, fontSize = 17.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.width(34.dp),
+            pauseLabel(seconds), color = Palette.Accent, fontSize = 15.sp,
+            fontWeight = FontWeight.Medium, modifier = Modifier.width(52.dp),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
-        StepButton("+", enabled = !locked && minutes < LimitStore.MAX_PAUSE_MIN) {
-            onChange(minutes + 1)
+        StepButton("+", enabled = !locked && seconds < LimitStore.MAX_PAUSE_S) {
+            onChange(seconds + step)
         }
     }
+}
+
+/** 45 -> "45 s", 60 -> "1 min", 75 -> "1:15". */
+private fun pauseLabel(s: Int): String = when {
+    s < 60 -> "$s s"
+    s % 60 == 0 -> "${s / 60} min"
+    else -> "%d:%02d".format(s / 60, s % 60)
 }
 
 @Composable

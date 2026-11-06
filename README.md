@@ -11,7 +11,7 @@ La 4.ª vez te manda al inicio y muestra una pantalla de bloqueo hasta las 15:00
 - Contadores que se reinician en cada hora en punto.
 - Límites y contadores guardados en archivos: se conservan aunque reinicies el teléfono.
 - **Anti-trampa:** cuando una app agota sus aperturas, no se puede subir ni quitar su límite hasta la siguiente hora. Solo se puede hacer más estricto.
-- **Pausa mínima:** minimizar una app y volver en menos de N minutos no gasta una apertura.
+- **Pausa mínima:** salir de una app y volver antes de N segundos (45 por defecto) no gasta una apertura.
 - Pantalla de bloqueo a pantalla completa con la hora en que la app vuelve a estar disponible.
 - Interfaz oscura y minimalista con buscador; las apps con límite aparecen primero.
 
@@ -19,9 +19,10 @@ La 4.ª vez te manda al inicio y muestra una pantalla de bloqueo hasta las 15:00
 
 | Pieza | Archivo | Qué hace |
 |---|---|---|
-| Servicio de accesibilidad | [`LimitAccessibilityService.kt`](app/src/main/java/net/jakstech/openlimit/LimitAccessibilityService.kt) | Detecta qué app pasa a primer plano y cuenta **sesiones**, no eventos (ver abajo). El teclado, la barra de notificaciones y el menú de compartir se ignoran. |
+| Servicio de accesibilidad | [`LimitAccessibilityService.kt`](app/src/main/java/net/jakstech/openlimit/LimitAccessibilityService.kt) | Filtra los eventos de Android (ignora teclado, barra de notificaciones, menú de compartir, diálogos y paneles) y actúa según lo que decide `OpenTracker`. |
+| Lógica de conteo | [`OpenTracker.kt`](app/src/main/java/net/jakstech/openlimit/OpenTracker.kt) | Decide si es apertura, misma sesión o bloqueo (ver abajo). Es Kotlin puro, sin APIs de Android, para poder probarlo. |
 | Pantalla de bloqueo | [`BlockOverlay.kt`](app/src/main/java/net/jakstech/openlimit/BlockOverlay.kt) | Se dibuja como capa de accesibilidad (`TYPE_ACCESSIBILITY_OVERLAY`), así que no necesita permisos extra. |
-| Almacenamiento | [`LimitStore.kt`](app/src/main/java/net/jakstech/openlimit/LimitStore.kt) | `limits.properties` (lo escribe la interfaz) y `counts.properties` (lo escribe el servicio, junto con la hora a la que pertenecen los contadores). |
+| Almacenamiento | [`LimitStore.kt`](app/src/main/java/net/jakstech/openlimit/LimitStore.kt) | `limits.properties` y `settings.properties` (los escribe la interfaz) y `counts.properties` (lo escribe el servicio, junto con la hora a la que pertenecen los contadores). |
 | Interfaz | [`MainActivity.kt`](app/src/main/java/net/jakstech/openlimit/MainActivity.kt) | Lista de apps con el selector − / +. |
 
 ### Cómo se cuenta una apertura
@@ -32,9 +33,10 @@ Los eventos de ventana (`TYPE_WINDOW_STATE_CHANGED`) generan mucho ruido. Animac
 2. La app al frente se decide cuando lleva **400 ms estable**. Ese tiempo se mide con la hora de cada evento (`eventTime`), no con la de llegada. Si el sistema pausa el proceso, los eventos llegan juntos y se procesan en orden. Si la app ya no está en pantalla, la apertura se cuenta pero no se muestra el bloqueo.
 3. `notificationTimeout="0"`: con un valor mayor, Android fusiona los eventos y se pierde el de "pantalla mostrada".
 4. La primera app al frente después de que el servicio arranca no cuenta.
-5. **Pausa mínima** (por defecto 2 min, ajustable de 0 a 10 en la pantalla principal): si vuelves a una app, por ejemplo después de minimizarla, antes de ese tiempo, sigue siendo la misma sesión y no cuenta. Si vuelves después, cuenta como apertura nueva. El tiempo incluye el que pasa con la pantalla apagada. No se puede subir mientras alguna app tenga sus aperturas agotadas. Un bloqueo termina la sesión anterior.
+5. **Pausa mínima** (por defecto 45 s, ajustable de 0 a 5 min en pasos de 15 s en la pantalla principal): si sales de una app y vuelves antes de ese tiempo, sigue siendo la misma sesión y no cuenta. Si vuelves después, cuenta como apertura nueva. El tiempo incluye el que pasa con la pantalla apagada. No se puede subir mientras alguna app tenga sus aperturas agotadas. Un bloqueo termina la sesión anterior.
+   Android no le dice a una app normal si otra app se **cerró** o solo se **minimizó**: en los dos casos solo se ve que salió de la pantalla. Por eso la pausa se aplica igual en ambos casos.
 
-Cada decisión queda en el registro con la etiqueta `OpenLimit`:
+Las decisiones sobre las apps **con límite** quedan en el registro con la etiqueta `OpenLimit`. Las demás apps no se registran:
 
 ```bash
 adb logcat -s OpenLimit
@@ -59,6 +61,27 @@ Con el teléfono conectado por USB y la depuración USB activada:
 ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## Tests
+
+**Unitarios (JVM, sin teléfono, ~1 s):**
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+- [`LimitStoreTest`](app/src/test/java/net/jakstech/openlimit/LimitStoreTest.kt) (21 tests): límites, anti-trampa (no subir ni quitar un límite agotado), reinicio en la hora en punto y a medianoche, persistencia entre instancias (reinicio o el otro proceso), archivos corruptos, pausa (por defecto, límites, bloqueo mientras haya apps agotadas).
+- [`OpenTrackerTest`](app/src/test/java/net/jakstech/openlimit/OpenTrackerTest.kt) (26 tests): conteo 1-2-3 y bloqueo, límite 0, apps sin límite y la propia app, eventos ruidosos (parpadeo al abrir, evento tardío al cerrar, duplicados), **eventos retrasados en tanda**, pausa mínima (dentro, fuera, exacta, con pantalla apagada, por app, sin reanudar tras un bloqueo) y reinicio por hora.
+
+Usan un reloj falso ([`FakeTime`](app/src/test/java/net/jakstech/openlimit/FakeTime.kt)) para simular horas, pantalla apagada y retrasos.
+
+**En el teléfono (adb, ~1 min):**
+
+```bash
+scripts/device-test.sh com.brave.browser
+```
+
+Comprueba que el servicio está activo y en primer plano, el conteo con bloqueo, la pausa mínima y los eventos retrasados (pausa el proceso con `kill -STOP`). Guarda tus límites y contadores antes de empezar y los restaura al terminar.
 
 ## Configuración en el teléfono
 
